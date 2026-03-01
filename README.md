@@ -6,8 +6,8 @@ It is designed for real editing tasks: read documents, update blocks, manage Att
 ## Repository Layout
 
 - Human docs are in repo root: `README.md`, `README.zh-CN.md`.
-- Actual skill package is in `skill/`.
-- The file used by agents is `skill/SKILL.md`.
+- Actual skill package is in `siyuan-bridge/`.
+- The file used by agents is `siyuan-bridge/SKILL.md`.
 
 ## What It Can Do
 
@@ -24,20 +24,20 @@ It is designed for real editing tasks: read documents, update blocks, manage Att
 
 ## How It Is Implemented (Short Version)
 
-- `skill/scripts/core/`
+- `siyuan-bridge/scripts/core/`
   - `config.py`: config loading and priority handling
   - `client.py`: unified SiYuan API client and write guard integration
   - `logging_utils.py`: UTF-8 safe write logs
-- `skill/scripts/modules/`
+- `siyuan-bridge/scripts/modules/`
   - `documents.py`: document read/write/import
   - `blocks.py`: block-level operations
   - `attributeview.py`: database operations and type conversion
   - `search.py`: query helpers
-- `skill/scripts/guards/`
+- `siyuan-bridge/scripts/guards/`
   - `read_guard.py`: read-first policy and conflict checks
-- `skill/scripts/formats/`
+- `siyuan-bridge/scripts/formats/`
   - `pmf.py`: PMF parse/render and safe patch subset
-- `skill/scripts/cli/siyuan_cli.py`
+- `siyuan-bridge/scripts/cli/siyuan_cli.py`
   - user-facing command routing and compatibility behavior
 
 ## API Token Storage
@@ -46,8 +46,8 @@ Token is not hardcoded in repository files.
 
 Configuration priority:
 1. Environment variables
-2. `skill/scripts/config.local.json`
-3. `skill/scripts/config.json`
+2. `siyuan-bridge/scripts/config.local.json`
+3. `siyuan-bridge/scripts/config.json`
 
 Token sources:
 - `SIYUAN_TOKEN` (highest priority)
@@ -59,7 +59,7 @@ Recommended setup:
 mkdir -p ~/.config/siyuan
 echo "your_siyuan_api_token" > ~/.config/siyuan/api_token
 chmod 600 ~/.config/siyuan/api_token
-cp skill/scripts/config.example.json skill/scripts/config.local.json
+cp siyuan-bridge/scripts/config.example.json siyuan-bridge/scripts/config.local.json
 ```
 
 ## Safety Defaults
