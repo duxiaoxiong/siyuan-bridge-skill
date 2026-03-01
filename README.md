@@ -1,44 +1,72 @@
 # Siyuan Bridge Skill
 
-Siyuan Bridge is a practical skill for operating SiYuan notes through a stable CLI.  
-It is designed for real editing tasks: read documents, update blocks, manage AttributeView databases, and apply safe patch workflows.
+Siyuan Bridge is a SiYuan-oriented skill package for practical note operations through a stable CLI.
+It focuses on three things: reliable editing, database operations (AttributeView), and safe write behavior.
 
 ## Repository Layout
 
-- Human docs are in repo root: `README.md`, `README.zh-CN.md`.
-- Actual skill package is in `siyuan-bridge/`.
-- The file used by agents is `siyuan-bridge/SKILL.md`.
+- Human-facing docs are in repo root: `README.md`, `README.zh-CN.md`.
+- The actual skill package is in `siyuan-bridge/`.
+- Agent entry file is `siyuan-bridge/SKILL.md`.
 
-## What It Can Do
+## Main Capabilities
 
-- Read documents in readable/typed/patchable views.
-- Import full content from URL, Markdown, or chat text into a document.
-- Write full documents (`replace` or `append`) and perform block-level edits.
-- Operate AttributeView databases:
-  - create database docs
-  - create inline databases in existing pages
-  - add/remove columns
-  - add rows and set cells by column name
-  - validate schema, strict writes, and date encoding
-- Enforce read-before-write guard by default to reduce accidental conflicts.
+### Document workflows
 
-## How It Is Implemented (Short Version)
+- Read documents in `readable`, `typed`, and `patchable` views.
+- Import full content from URL, Markdown, or chat text.
+- Write full documents with `replace`/`append`.
+- Support PMF-based patch flow for controlled edits.
 
-- `siyuan-bridge/scripts/core/`
-  - `config.py`: config loading and priority handling
-  - `client.py`: unified SiYuan API client and write guard integration
-  - `logging_utils.py`: UTF-8 safe write logs
-- `siyuan-bridge/scripts/modules/`
-  - `documents.py`: document read/write/import
-  - `blocks.py`: block-level operations
-  - `attributeview.py`: database operations and type conversion
-  - `search.py`: query helpers
-- `siyuan-bridge/scripts/guards/`
-  - `read_guard.py`: read-first policy and conflict checks
-- `siyuan-bridge/scripts/formats/`
-  - `pmf.py`: PMF parse/render and safe patch subset
-- `siyuan-bridge/scripts/cli/siyuan_cli.py`
-  - user-facing command routing and compatibility behavior
+### Block workflows
+
+- Update, append, prepend, insert-after, and delete blocks.
+- Provide utility block operations such as `check`, callout helpers, and table row append.
+
+### AttributeView (Database) workflows
+
+- Create standalone database docs and inline databases in existing pages.
+- Inspect schema and write by column name.
+- Add/remove columns and rows.
+- Seed rows from JSON and validate database behavior.
+- Support common value types: text, number, date, select/mSelect, checkbox, url, email, phone, relation, mAsset.
+
+## Why Database Operations Are Stable
+
+The database part is designed with explicit safeguards and deterministic steps:
+
+- AV ID normalization:
+  accept both AV block ID and real AV ID, then normalize internally.
+- Async readiness handling:
+  wait/retry until AV view is ready before first write.
+- Primary column consistency:
+  business columns are inserted after primary `block` column by default.
+- Strict mapping mode:
+  `--strict` rejects unknown column names instead of silently ignoring.
+- Real row ID resolution:
+  after row insertion, re-render and detect the actual persisted row ID.
+- Select option persistence:
+  `add-col --options` supports explicit colors and persists options to schema.
+- Correct date encoding:
+  date values are written as Unix epoch milliseconds to avoid wrong-year rendering.
+- Inline target flexibility:
+  inline template creation supports both `doc_id` and normal `block_id`.
+
+## Safety and Data Integrity
+
+- Read-before-write guard is enabled by default.
+- Conflict checks use read marker + document update state + TTL.
+- Unsafe bypass is explicit only: `SIYUAN_ALLOW_UNSAFE_WRITE=true`.
+- PMF apply-patch uses a safe subset in current version.
+- Write commands reject literal `\n` arguments by default and suggest stdin/heredoc or `--decode-escapes`.
+
+## Implementation Overview
+
+- `siyuan-bridge/scripts/core/`: config loading, API client, logging utilities.
+- `siyuan-bridge/scripts/modules/`: domain logic for documents, blocks, search, and AttributeView.
+- `siyuan-bridge/scripts/guards/`: read guard and conflict detection.
+- `siyuan-bridge/scripts/formats/`: PMF and markdown helpers.
+- `siyuan-bridge/scripts/cli/siyuan_cli.py`: user-facing command router and compatibility entry behavior.
 
 ## API Token Storage
 
@@ -51,7 +79,7 @@ Configuration priority:
 
 Token sources:
 - `SIYUAN_TOKEN` (highest priority)
-- `token_file` path (default: `~/.config/siyuan/api_token`)
+- `token_file` (default: `~/.config/siyuan/api_token`)
 
 Recommended setup:
 
@@ -61,10 +89,3 @@ echo "your_siyuan_api_token" > ~/.config/siyuan/api_token
 chmod 600 ~/.config/siyuan/api_token
 cp siyuan-bridge/scripts/config.example.json siyuan-bridge/scripts/config.local.json
 ```
-
-## Safety Defaults
-
-- Read-before-write guard is enabled by default.
-- Unsafe bypass is explicit only: `SIYUAN_ALLOW_UNSAFE_WRITE=true`.
-- AV date values are written as Unix epoch milliseconds.
-- CLI rejects literal `\n` by default for write args; use stdin/heredoc or `--decode-escapes`.
