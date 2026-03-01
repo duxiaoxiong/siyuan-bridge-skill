@@ -1,0 +1,10 @@
+{
+  "api_url": "http://127.0.0.1:6806",
+  "token_file": "~/.config/siyuan/api_token",
+  "forbidden_notebooks": [],
+  "main_notebook_id": "",
+  "read_guard_ttl_seconds": 3600,
+  "open_doc_char_limit": 15000,
+  "write_log_path": ".siyuan-writes.log",
+  "read_guard_cache_path": ".siyuan-read-guard-cache.json"
+}

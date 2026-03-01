@@ -1,0 +1,4 @@
+interface:
+  display_name: "Siyuan Bridge"
+  short_description: "Siyuan notes bridge for search, safe edits, and databases"
+  default_prompt: "Use Siyuan bridge to search notes, edit safely with read-guard, and operate AttributeView databases."

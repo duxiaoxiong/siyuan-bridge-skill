@@ -1,0 +1,12 @@
+# Local/private runtime config
+scripts/config.local.json
+
+# Runtime caches/logs
+scripts/.siyuan-read-guard-cache.json
+scripts/.siyuan-writes.log
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+scripts/**/__pycache__/
+scripts/**/*.py[cod]
