@@ -1,92 +1,253 @@
 # Siyuan Bridge Skill
 
-Siyuan Bridge 是一个面向 SiYuan 的技能包，通过稳定的 CLI 提供可落地的笔记操作能力。
-核心目标是三点：写入可靠、数据库操作稳定、安全边界清晰。
+这是一个给 Codex/agent 使用的 SiYuan 连接 skill。它通过一个 Python CLI 调用 SiYuan HTTP API，用来搜索、读取、修改文档和操作 AttributeView 数据库。
 
 English version: [README.en.md](./README.en.md)
 
-## 仓库结构
+## 目录
 
-- 根目录放人类文档：`README.md`（中文主文档）、`README.en.md`（英文辅助文档）。
-- 实际 skill 包放在 `siyuan-bridge/` 目录。
-- Agent 入口文件是 `siyuan-bridge/SKILL.md`。
+实际 skill 在：
 
-## 主要功能
+```text
+siyuan-bridge/
+```
 
-### 文档能力
+主要入口：
 
-- 支持 `readable`、`typed`、`patchable` 三种文档读取视图。
-- 支持从 URL、Markdown、对话文本整文导入。
-- 支持整文写入（`replace`/`append`）。
-- 支持 PMF 补丁流程，便于受控修改。
+```text
+siyuan-bridge/SKILL.md
+siyuan-bridge/scripts/siyuan.py
+```
 
-### 块级能力
+## 安装到本机 Codex
 
-- 支持 update/append/prepend/insert-after/delete 等基础写操作。
-- 提供 `check`、callout、表格追加行等实用命令。
+把 `siyuan-bridge/` 复制到 Codex 的 skills 目录：
 
-### AttributeView（数据库）能力
+```bash
+mkdir -p ~/.codex/skills
+cp -R siyuan-bridge ~/.codex/skills/siyuan-bridge
+```
 
-- 支持新建独立数据库文档与页面内内嵌数据库。
-- 支持 schema 读取、按列名写入、增删列、增删行。
-- 支持 JSON 批量 seed 与数据库自检。
-- 覆盖常用字段类型：text/number/date/select/mSelect/checkbox/url/email/phone/relation/mAsset。
+如果本机已经装过，可以用 `rsync` 覆盖，但不要覆盖本地配置：
 
-## 数据库能力为什么稳定
+```bash
+rsync -a --delete \
+  --exclude 'scripts/config.local.json' \
+  --exclude 'scripts/.siyuan-read-guard-cache.json' \
+  --exclude 'scripts/.siyuan-writes.log' \
+  siyuan-bridge/ ~/.codex/skills/siyuan-bridge/
+```
 
-数据库路径做了明确的“防错机制 + 固定流程”：
-
-- AV ID 统一解析：
-  可传 AV block ID 或真实 AV ID，内部自动归一。
-- 异步就绪处理：
-  新建库后会等待/重试，直到 AV view 可写。
-- 主键列稳定：
-  默认在主键 `block` 列后插入业务列，避免主键被挤乱。
-- 严格写入模式：
-  `--strict` 会拒绝未知列名，不做静默吞错。
-- 行 ID 可靠回收：
-  加行后会重新渲染并获取真实 row_id。
-- 选项列可控：
-  `add-col --options` 支持显式颜色并落盘到 schema。
-- 日期编码正确：
-  date 统一按 Unix 毫秒写入，避免年份显示异常。
-- 内嵌建库目标明确：
-  同时支持 `doc_id` 与普通 `block_id` 作为父目标。
-
-## 安全与数据一致性
-
-- 默认启用读后写保护。
-- 冲突检测结合读标记、文档更新时间和 TTL。
-- 仅显式开关可绕过：`SIYUAN_ALLOW_UNSAFE_WRITE=true`。
-- PMF `apply-patch` 当前版本采用安全子集策略。
-- 写入参数中若出现字面量 `\n`，CLI 默认拒绝，并提示使用 stdin/heredoc 或 `--decode-escapes`。
-
-## 实现方式（简述）
-
-- `siyuan-bridge/scripts/core/`：配置、API 客户端、日志基础设施。
-- `siyuan-bridge/scripts/modules/`：文档、块、检索、数据库业务模块。
-- `siyuan-bridge/scripts/guards/`：读后写围栏与冲突检测。
-- `siyuan-bridge/scripts/formats/`：PMF 与 markdown 辅助。
-- `siyuan-bridge/scripts/cli/siyuan_cli.py`：对外命令路由与兼容入口。
-
-## API Token 存储方式
-
-仓库中不硬编码 token。
+## 配置连接
 
 配置优先级：
+
 1. 环境变量
 2. `siyuan-bridge/scripts/config.local.json`
 3. `siyuan-bridge/scripts/config.json`
 
-Token 来源：
-- `SIYUAN_TOKEN`（最高优先级）
-- `token_file`（默认：`~/.config/siyuan/api_token`）
-
-推荐配置：
+推荐把 token 放在单独文件里，不写进仓库：
 
 ```bash
 mkdir -p ~/.config/siyuan
 echo "your_siyuan_api_token" > ~/.config/siyuan/api_token
 chmod 600 ~/.config/siyuan/api_token
-cp siyuan-bridge/scripts/config.example.json siyuan-bridge/scripts/config.local.json
+```
+
+复制本地配置文件：
+
+```bash
+cd siyuan-bridge
+cp scripts/config.example.json scripts/config.local.json
+```
+
+编辑 `scripts/config.local.json`：
+
+```json
+{
+  "api_url": "http://127.0.0.1:6806",
+  "token_file": "~/.config/siyuan/api_token",
+  "forbidden_notebooks": [],
+  "main_notebook_id": "",
+  "read_guard_ttl_seconds": 3600,
+  "open_doc_char_limit": 15000,
+  "write_log_path": ".siyuan-writes.log",
+  "read_guard_cache_path": ".siyuan-read-guard-cache.json"
+}
+```
+
+如果 SiYuan 在 NAS、Docker 或远程机器上，把 `api_url` 改成对应地址。临时切换地址可以用环境变量：
+
+```bash
+SIYUAN_API_URL="https://<your-siyuan-domain>" python3 scripts/siyuan.py doctor --json
+```
+
+## 检查连接
+
+在 skill 目录运行：
+
+```bash
+cd siyuan-bridge
+python3 scripts/siyuan.py doctor --json
+```
+
+如果正常，会看到：
+
+```json
+{
+  "ok": true
+}
+```
+
+也可以列出功能：
+
+```bash
+python3 scripts/siyuan.py capabilities --json
+```
+
+## 常用命令
+
+查看笔记本：
+
+```bash
+python3 scripts/siyuan.py notebooks --json
+```
+
+查看最近文档：
+
+```bash
+python3 scripts/siyuan.py docs recent --limit 10 --json
+```
+
+读取文档结构：
+
+```bash
+python3 scripts/siyuan.py open-doc <doc_id> typed --semantic --json
+```
+
+读取有限文档树：
+
+```bash
+python3 scripts/siyuan.py doc tree <notebook_id> / --depth 2 --limit 200 --json
+```
+
+搜索：
+
+```bash
+python3 scripts/siyuan.py search <keyword>
+python3 scripts/siyuan.py search-type d --limit 10
+```
+
+读取块：
+
+```bash
+python3 scripts/siyuan.py block get <block_id> --format markdown
+python3 scripts/siyuan.py block get <block_id> --format kramdown --command "head 20"
+python3 scripts/siyuan.py block attrs <block_id>
+```
+
+调用只读 API：
+
+```bash
+python3 scripts/siyuan.py api post /api/system/version '{}'
+```
+
+## 写入命令
+
+写入前建议先读目标文档：
+
+```bash
+python3 scripts/siyuan.py open-doc <doc_id> typed --semantic --json
+```
+
+常见写入：
+
+```bash
+python3 scripts/siyuan.py append <parent_id> "new content"
+python3 scripts/siyuan.py update <block_id> "new content"
+python3 scripts/siyuan.py prepend <parent_id> "new content"
+python3 scripts/siyuan.py insert-after <block_id> "new content"
+python3 scripts/siyuan.py delete <block_id>
+```
+
+文档操作：
+
+```bash
+python3 scripts/siyuan.py doc create-child <parent_doc_id> <title> "content"
+python3 scripts/siyuan.py doc rename <doc_id> <new_title>
+python3 scripts/siyuan.py doc move <from_doc_ids_csv> <to_doc_id>
+python3 scripts/siyuan.py doc write-full <doc_id_or_path> --mode replace < markdown.md
+```
+
+## AttributeView 数据库
+
+查看 schema：
+
+```bash
+python3 scripts/siyuan.py av schema <av_id_or_av_block_id>
+```
+
+创建页面内数据库：
+
+```bash
+python3 scripts/siyuan.py av create-inline-template <parent_doc_id> \
+  '[{"name":"Status","type":"select","options":[{"name":"Todo","color":"2"}]}]' \
+  --rows '[{"__title":"Task A","Status":"Todo"}]' \
+  --strict
+```
+
+加一行：
+
+```bash
+python3 scripts/siyuan.py av add-row-with-data <av_id_or_av_block_id> --strict \
+  '{"__title":"Task B","Status":"Todo"}'
+```
+
+批量 seed：
+
+```bash
+python3 scripts/siyuan.py av seed <av_id_or_av_block_id> --rows '[{"__title":"Task C"}]' --strict
+```
+
+检查数据库：
+
+```bash
+python3 scripts/siyuan.py av validate <av_id_or_av_block_id>
+```
+
+## 写入保护
+
+默认有读后写保护。简单说：修改已有内容前，先读目标文档；否则某些写入会被拒绝。
+
+如果确实要绕过：
+
+```bash
+SIYUAN_ALLOW_UNSAFE_WRITE=true python3 scripts/siyuan.py ...
+```
+
+不建议长期打开这个开关。
+
+## 本地文件
+
+这些文件是本地状态，不应该提交：
+
+```text
+siyuan-bridge/scripts/config.local.json
+siyuan-bridge/scripts/.siyuan-read-guard-cache.json
+siyuan-bridge/scripts/.siyuan-writes.log
+```
+
+## 测试
+
+运行单元测试：
+
+```bash
+cd siyuan-bridge
+python3 -m unittest discover -s scripts/tests
+```
+
+运行连接测试：
+
+```bash
+python3 scripts/siyuan.py doctor --json
 ```

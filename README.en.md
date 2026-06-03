@@ -1,93 +1,171 @@
 # Siyuan Bridge Skill
 
-Siyuan Bridge is a SiYuan-oriented skill package for practical note operations through a stable CLI.
-It focuses on three things: reliable editing, database operations (AttributeView), and safe write behavior.
+This is a Codex/agent skill for connecting to SiYuan through the SiYuan HTTP API. It provides a Python CLI for searching notes, reading documents, editing content, and working with AttributeView databases.
 
 Primary Chinese document: [README.md](./README.md)
 
-## Repository Layout
+## Location
 
-- Human-facing docs are in repo root: `README.md` (primary Chinese), `README.en.md` (supporting English).
-- The actual skill package is in `siyuan-bridge/`.
-- Agent entry file is `siyuan-bridge/SKILL.md`.
+The actual skill package is:
 
-## Main Capabilities
+```text
+siyuan-bridge/
+```
 
-### Document workflows
+Main entry points:
 
-- Read documents in `readable`, `typed`, and `patchable` views.
-- Import full content from URL, Markdown, or chat text.
-- Write full documents with `replace`/`append`.
-- Support PMF-based patch flow for controlled edits.
+```text
+siyuan-bridge/SKILL.md
+siyuan-bridge/scripts/siyuan.py
+```
 
-### Block workflows
+## Install For Local Codex
 
-- Update, append, prepend, insert-after, and delete blocks.
-- Provide utility block operations such as `check`, callout helpers, and table row append.
+Copy the skill folder into Codex skills:
 
-### AttributeView (Database) workflows
+```bash
+mkdir -p ~/.codex/skills
+cp -R siyuan-bridge ~/.codex/skills/siyuan-bridge
+```
 
-- Create standalone database docs and inline databases in existing pages.
-- Inspect schema and write by column name.
-- Add/remove columns and rows.
-- Seed rows from JSON and validate database behavior.
-- Support common value types: text, number, date, select/mSelect, checkbox, url, email, phone, relation, mAsset.
+For updates, use `rsync` without overwriting local config:
 
-## Why Database Operations Are Stable
+```bash
+rsync -a --delete \
+  --exclude 'scripts/config.local.json' \
+  --exclude 'scripts/.siyuan-read-guard-cache.json' \
+  --exclude 'scripts/.siyuan-writes.log' \
+  siyuan-bridge/ ~/.codex/skills/siyuan-bridge/
+```
 
-The database part is designed with explicit safeguards and deterministic steps:
+## Configuration
 
-- AV ID normalization:
-  accept both AV block ID and real AV ID, then normalize internally.
-- Async readiness handling:
-  wait/retry until AV view is ready before first write.
-- Primary column consistency:
-  business columns are inserted after primary `block` column by default.
-- Strict mapping mode:
-  `--strict` rejects unknown column names instead of silently ignoring.
-- Real row ID resolution:
-  after row insertion, re-render and detect the actual persisted row ID.
-- Select option persistence:
-  `add-col --options` supports explicit colors and persists options to schema.
-- Correct date encoding:
-  date values are written as Unix epoch milliseconds to avoid wrong-year rendering.
-- Inline target flexibility:
-  inline template creation supports both `doc_id` and normal `block_id`.
+Config priority:
 
-## Safety and Data Integrity
-
-- Read-before-write guard is enabled by default.
-- Conflict checks use read marker + document update state + TTL.
-- Unsafe bypass is explicit only: `SIYUAN_ALLOW_UNSAFE_WRITE=true`.
-- PMF apply-patch uses a safe subset in current version.
-- Write commands reject literal `\n` arguments by default and suggest stdin/heredoc or `--decode-escapes`.
-
-## Implementation Overview
-
-- `siyuan-bridge/scripts/core/`: config loading, API client, logging utilities.
-- `siyuan-bridge/scripts/modules/`: domain logic for documents, blocks, search, and AttributeView.
-- `siyuan-bridge/scripts/guards/`: read guard and conflict detection.
-- `siyuan-bridge/scripts/formats/`: PMF and markdown helpers.
-- `siyuan-bridge/scripts/cli/siyuan_cli.py`: user-facing command router and compatibility entry behavior.
-
-## API Token Storage
-
-Token is not hardcoded in repository files.
-
-Configuration priority:
 1. Environment variables
 2. `siyuan-bridge/scripts/config.local.json`
 3. `siyuan-bridge/scripts/config.json`
 
-Token sources:
-- `SIYUAN_TOKEN` (highest priority)
-- `token_file` (default: `~/.config/siyuan/api_token`)
-
-Recommended setup:
+Store the API token outside the repo:
 
 ```bash
 mkdir -p ~/.config/siyuan
 echo "your_siyuan_api_token" > ~/.config/siyuan/api_token
 chmod 600 ~/.config/siyuan/api_token
-cp siyuan-bridge/scripts/config.example.json siyuan-bridge/scripts/config.local.json
+```
+
+Create local config:
+
+```bash
+cd siyuan-bridge
+cp scripts/config.example.json scripts/config.local.json
+```
+
+Example `scripts/config.local.json`:
+
+```json
+{
+  "api_url": "http://127.0.0.1:6806",
+  "token_file": "~/.config/siyuan/api_token",
+  "forbidden_notebooks": [],
+  "main_notebook_id": "",
+  "read_guard_ttl_seconds": 3600,
+  "open_doc_char_limit": 15000,
+  "write_log_path": ".siyuan-writes.log",
+  "read_guard_cache_path": ".siyuan-read-guard-cache.json"
+}
+```
+
+Temporary endpoint override:
+
+```bash
+SIYUAN_API_URL="https://<your-siyuan-domain>" python3 scripts/siyuan.py doctor --json
+```
+
+## Check Connection
+
+```bash
+cd siyuan-bridge
+python3 scripts/siyuan.py doctor --json
+python3 scripts/siyuan.py capabilities --json
+```
+
+## Common Commands
+
+```bash
+python3 scripts/siyuan.py notebooks --json
+python3 scripts/siyuan.py docs recent --limit 10 --json
+python3 scripts/siyuan.py open-doc <doc_id> typed --semantic --json
+python3 scripts/siyuan.py doc tree <notebook_id> / --depth 2 --limit 200 --json
+python3 scripts/siyuan.py search <keyword>
+python3 scripts/siyuan.py search-type d --limit 10
+python3 scripts/siyuan.py block get <block_id> --format markdown
+python3 scripts/siyuan.py block attrs <block_id>
+python3 scripts/siyuan.py api post /api/system/version '{}'
+```
+
+## Writes
+
+Read the target document before editing it:
+
+```bash
+python3 scripts/siyuan.py open-doc <doc_id> typed --semantic --json
+```
+
+Basic writes:
+
+```bash
+python3 scripts/siyuan.py append <parent_id> "new content"
+python3 scripts/siyuan.py update <block_id> "new content"
+python3 scripts/siyuan.py prepend <parent_id> "new content"
+python3 scripts/siyuan.py insert-after <block_id> "new content"
+python3 scripts/siyuan.py delete <block_id>
+```
+
+Document operations:
+
+```bash
+python3 scripts/siyuan.py doc create-child <parent_doc_id> <title> "content"
+python3 scripts/siyuan.py doc rename <doc_id> <new_title>
+python3 scripts/siyuan.py doc move <from_doc_ids_csv> <to_doc_id>
+python3 scripts/siyuan.py doc write-full <doc_id_or_path> --mode replace < markdown.md
+```
+
+## AttributeView
+
+```bash
+python3 scripts/siyuan.py av schema <av_id_or_av_block_id>
+python3 scripts/siyuan.py av add-row-with-data <av_id_or_av_block_id> --strict '{"__title":"Task B","Status":"Todo"}'
+python3 scripts/siyuan.py av seed <av_id_or_av_block_id> --rows '[{"__title":"Task C"}]' --strict
+python3 scripts/siyuan.py av validate <av_id_or_av_block_id>
+```
+
+## Write Guard
+
+The CLI has a read-before-write guard. If an edit is rejected, read the target document first.
+
+Emergency bypass:
+
+```bash
+SIYUAN_ALLOW_UNSAFE_WRITE=true python3 scripts/siyuan.py ...
+```
+
+Do not leave this enabled by default.
+
+## Local Files
+
+Do not commit these:
+
+```text
+siyuan-bridge/scripts/config.local.json
+siyuan-bridge/scripts/.siyuan-read-guard-cache.json
+siyuan-bridge/scripts/.siyuan-writes.log
+```
+
+## Tests
+
+```bash
+cd siyuan-bridge
+python3 -m unittest discover -s scripts/tests
+python3 scripts/siyuan.py doctor --json
 ```
