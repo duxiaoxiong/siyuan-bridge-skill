@@ -5,7 +5,7 @@ import html
 import os
 import re
 from html.parser import HTMLParser
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import urllib.request
 
 from ..core.client import SiyuanClient
@@ -143,6 +143,71 @@ class DocumentModule:
                 }
             )
         return blocks
+
+    def tree(
+        self,
+        notebook_id: str,
+        path: str = "/",
+        sort_mode: Optional[int] = None,
+        max_depth: int = 3,
+        max_items: int = 200,
+    ) -> Dict[str, object]:
+        nb = str(notebook_id or "").strip()
+        if not nb:
+            raise ValidationError("缺少 notebook_id")
+        start_path = str(path or "/").strip() or "/"
+        effective_sort = 15 if sort_mode is None else int(sort_mode)
+        depth_limit = max(0, int(max_depth or 0))
+        item_limit = max(0, int(max_items or 0))
+        seen = 0
+        truncated = False
+
+        def _walk(current_path: str, depth: int = 1) -> List[Dict[str, Any]]:
+            nonlocal seen, truncated
+            if item_limit and seen >= item_limit:
+                truncated = True
+                return []
+            res = self.client.list_docs_by_path(nb, current_path, sort=effective_sort)
+            if res.get("code") != 0:
+                raise ValidationError(f"读取文档树失败: {res.get('msg')}")
+            files = res.get("data", {}).get("files", []) or []
+            nodes: List[Dict[str, Any]] = []
+            for item in files:
+                if item_limit and seen >= item_limit:
+                    truncated = True
+                    break
+                seen += 1
+                name = str(item.get("name", "")).removesuffix(".sy")
+                node = {
+                    "name": name,
+                    "id": item.get("id", ""),
+                    "path": item.get("path", ""),
+                    "children": [],
+                }
+                has_children = int(item.get("subFileCount", 0) or 0) > 0
+                if has_children and (not depth_limit or depth < depth_limit):
+                    child_path = str(item.get("path", "")).removesuffix(".sy")
+                    node["children"] = _walk(child_path, depth + 1)
+                elif has_children and depth_limit and depth >= depth_limit:
+                    truncated = True
+                    node["truncated_children"] = True
+                nodes.append(node)
+            return nodes
+
+        items = _walk(start_path)
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "notebook_id": nb,
+                "path": start_path,
+                "sort_mode": effective_sort,
+                "max_depth": depth_limit,
+                "max_items": item_limit,
+                "truncated": truncated,
+                "items": items,
+            },
+        }
 
     def open_doc(
         self,
@@ -379,6 +444,60 @@ class DocumentModule:
                 "written_chars": len(markdown),
             },
         }
+
+    def create_child(self, parent_doc_id: str, title: str, markdown: str = "") -> Dict[str, object]:
+        parent_id = str(parent_doc_id or "").strip()
+        clean_title = str(title or "").strip()
+        if not parent_id:
+            raise ValidationError("缺少 parent_doc_id")
+        if not clean_title:
+            raise ValidationError("缺少子文档标题")
+
+        parent = self.client.get_block(parent_id)
+        if not parent:
+            raise ValidationError(f"父文档不存在: {parent_id}")
+        if parent.get("type") != "d":
+            raise ValidationError(f"parent_doc_id 不是文档类型: {parent_id}")
+
+        notebook_id = str(parent.get("box", "")).strip()
+        parent_path = str(parent.get("hpath", "")).rstrip("/")
+        if not notebook_id or not parent_path:
+            raise ValidationError("无法解析父文档 notebook/path")
+        path = f"{parent_path}/{clean_title}"
+        created = self.client.create_doc(notebook_id, path, markdown)
+        if created.get("code") != 0:
+            return created
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "doc_id": str(created.get("data", "")),
+                "parent_doc_id": parent_id,
+                "title": clean_title,
+                "path": path,
+                "chars": len(markdown),
+            },
+        }
+
+    def rename(self, doc_id: str, title: str) -> Dict[str, object]:
+        clean_id = str(doc_id or "").strip()
+        clean_title = str(title or "").strip()
+        if not clean_id or not clean_title:
+            raise ValidationError("doc rename 需要 doc_id 和 title")
+        res = self.client.rename_doc_by_id(clean_id, clean_title)
+        if res.get("code") != 0:
+            return res
+        return {"code": 0, "msg": "", "data": {"doc_id": clean_id, "title": clean_title, "response": res.get("data")}}
+
+    def move(self, from_ids: List[str], to_id: str) -> Dict[str, object]:
+        ids = [str(x).strip() for x in from_ids if str(x).strip()]
+        target = str(to_id or "").strip()
+        if not ids or not target:
+            raise ValidationError("doc move 需要 from_ids 和 to_id")
+        res = self.client.move_docs_by_id(ids, target)
+        if res.get("code") != 0:
+            return res
+        return {"code": 0, "msg": "", "data": {"from_ids": ids, "to_id": target, "response": res.get("data")}}
 
     def _chat_to_markdown(self, text: str) -> str:
         out = ["# Imported Chat", ""]

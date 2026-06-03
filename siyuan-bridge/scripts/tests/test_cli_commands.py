@@ -15,6 +15,7 @@ class FakeClient:
     def __init__(self):
         self.settings = self._Settings()
         self.allow_unsafe_write = False
+        self.last_post = {}
 
     def update_block(self, block_id, content):
         return {"code": 0, "data": {"id": block_id, "content": content}}
@@ -36,6 +37,18 @@ class FakeClient:
 
     def ls_notebooks(self):
         return {"code": 0, "msg": "", "data": {"notebooks": [{"id": "nb-1", "name": "main", "icon": "1F4D3"}]}}
+
+    def get_block_attrs(self, block_id):
+        return {"code": 0, "msg": "", "data": {"id": block_id, "attrs": {"custom-status": "active"}}}
+
+    def set_block_attrs(self, block_id, attrs):
+        return {"code": 0, "msg": "", "data": {"id": block_id, "attrs": attrs}}
+
+    def safe_api_post(self, path, payload, allow_write=False):
+        self.last_post = {"path": path, "payload": payload, "allow_write": allow_write}
+        if path == "/api/block/updateBlock" and not allow_write:
+            return {"code": -1, "msg": "write endpoint requires --allow-write", "data": None}
+        return {"code": 0, "msg": "", "data": self.last_post}
 
 
 class FakeSearch:
@@ -185,15 +198,33 @@ class FakeAV:
             },
         }
 
+    def search(self, keyword, av_id=""):
+        return {"code": 0, "msg": "", "data": {"keyword": keyword, "av_id": av_id, "items": [{"id": "av-1"}]}}
+
+    def get_columns_by_av_id(self, av_id):
+        return {"code": 0, "msg": "", "data": {"av_id": av_id, "columns": [{"id": "key-1", "name": "Task"}]}}
+
+    def block_ids_to_item_ids(self, av_id, block_ids):
+        return {"code": 0, "msg": "", "data": {"av_id": av_id, "block_ids": block_ids, "item_ids": ["item-1"]}}
+
+    def item_ids_to_block_ids(self, av_id, item_ids):
+        return {"code": 0, "msg": "", "data": {"av_id": av_id, "item_ids": item_ids, "block_ids": ["block-1"]}}
+
+    def get_block_databases(self, block_id):
+        return {"code": 0, "msg": "", "data": {"block_id": block_id, "databases": [{"av_id": "av-1"}]}}
+
 
 class FakeBlocks:
     def __init__(self, _):
         pass
 
-    def get_block_content(self, block_id, fmt="markdown"):
+    def get_block_content(self, block_id, fmt="markdown", command=""):
         if fmt == "meta":
             return {"code": 0, "msg": "", "data": {"id": block_id, "type": "p"}}
-        return {"code": 0, "msg": "", "data": {"format": fmt, "content": f"{fmt}:{block_id}"}}
+        content = f"{fmt}:{block_id}\nalpha\nbeta"
+        if command == "grep beta":
+            content = "beta"
+        return {"code": 0, "msg": "", "data": {"format": fmt, "content": content, "command": command}}
 
     def extract_refs(self, target):
         return {"code": 0, "msg": "", "data": {"target_id": target, "counts": {"block_refs": 1}}}
@@ -246,6 +277,39 @@ class FakeDocs:
                 "chars": len(markdown),
             },
         }
+
+    def tree(self, notebook_id, path="/", sort_mode=None, max_depth=3, max_items=200):
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "notebook_id": notebook_id,
+                "path": path,
+                "sort_mode": sort_mode,
+                "max_depth": max_depth,
+                "max_items": max_items,
+                "truncated": False,
+                "items": [{"name": "Root", "id": "doc-1", "children": []}],
+            },
+        }
+
+    def create_child(self, parent_doc_id, title, markdown=""):
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "parent_doc_id": parent_doc_id,
+                "title": title,
+                "doc_id": "child-1",
+                "chars": len(markdown),
+            },
+        }
+
+    def rename(self, doc_id, title):
+        return {"code": 0, "msg": "", "data": {"doc_id": doc_id, "title": title}}
+
+    def move(self, from_ids, to_id):
+        return {"code": 0, "msg": "", "data": {"from_ids": from_ids, "to_id": to_id}}
 
 
 class CliCommandTests(unittest.TestCase):
@@ -536,6 +600,42 @@ class CliCommandTests(unittest.TestCase):
     @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
     @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
     @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_av_discovery_commands(self):
+        search_buf = io.StringIO()
+        with redirect_stdout(search_buf):
+            search_code = siyuan_cli.main(["av", "search", "Task", "--av", "av-1"])
+        self.assertEqual(search_code, 0)
+        self.assertIn("\"keyword\": \"Task\"", search_buf.getvalue())
+
+        columns_buf = io.StringIO()
+        with redirect_stdout(columns_buf):
+            columns_code = siyuan_cli.main(["av", "columns", "av-1"])
+        self.assertEqual(columns_code, 0)
+        self.assertIn("\"name\": \"Task\"", columns_buf.getvalue())
+
+        b2i_buf = io.StringIO()
+        with redirect_stdout(b2i_buf):
+            b2i_code = siyuan_cli.main(["av", "block-to-item", "av-1", "block-1,block-2"])
+        self.assertEqual(b2i_code, 0)
+        self.assertIn("\"item_ids\": [", b2i_buf.getvalue())
+
+        i2b_buf = io.StringIO()
+        with redirect_stdout(i2b_buf):
+            i2b_code = siyuan_cli.main(["av", "item-to-block", "av-1", "item-1"])
+        self.assertEqual(i2b_code, 0)
+        self.assertIn("\"block_ids\": [", i2b_buf.getvalue())
+
+        db_buf = io.StringIO()
+        with redirect_stdout(db_buf):
+            db_code = siyuan_cli.main(["av", "block-databases", "block-1"])
+        self.assertEqual(db_code, 0)
+        self.assertIn("\"databases\": [", db_buf.getvalue())
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
     def test_search_type_command(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -614,6 +714,55 @@ class CliCommandTests(unittest.TestCase):
     @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
     @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
     @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_doc_tree_command(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = siyuan_cli.main(["doc", "tree", "nb-1", "/", "--sort", "15", "--depth", "2", "--limit", "50", "--json"])
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("\"items\": [", out)
+        self.assertIn("\"sort_mode\": 15", out)
+        self.assertIn("\"max_depth\": 2", out)
+        self.assertIn("\"max_items\": 50", out)
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_doc_create_child_command(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = siyuan_cli.main(["doc", "create-child", "doc-1", "Child Title", "hello"])
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("\"parent_doc_id\": \"doc-1\"", out)
+        self.assertIn("\"title\": \"Child Title\"", out)
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_doc_rename_and_move_commands(self):
+        rename_buf = io.StringIO()
+        with redirect_stdout(rename_buf):
+            rename_code = siyuan_cli.main(["doc", "rename", "doc-1", "New Title"])
+        self.assertEqual(rename_code, 0)
+        self.assertIn("\"title\": \"New Title\"", rename_buf.getvalue())
+
+        move_buf = io.StringIO()
+        with redirect_stdout(move_buf):
+            move_code = siyuan_cli.main(["doc", "move", "doc-1,doc-2", "target-1"])
+        self.assertEqual(move_code, 0)
+        self.assertIn("\"from_ids\": [", move_buf.getvalue())
+        self.assertIn("\"target-1\"", move_buf.getvalue())
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
     def test_create_rejects_literal_escaped_newline(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -644,6 +793,36 @@ class CliCommandTests(unittest.TestCase):
             code = siyuan_cli.main(["block", "get", "blk-1", "--format", "meta"])
         self.assertEqual(code, 0)
         self.assertIn("\"type\": \"p\"", buf.getvalue())
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_block_get_command_filter(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = siyuan_cli.main(["block", "get", "blk-1", "--format", "markdown", "--command", "grep beta"])
+        self.assertEqual(code, 0)
+        self.assertEqual(buf.getvalue().strip(), "beta")
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_block_attrs_commands(self):
+        attrs_buf = io.StringIO()
+        with redirect_stdout(attrs_buf):
+            attrs_code = siyuan_cli.main(["block", "attrs", "blk-1"])
+        self.assertEqual(attrs_code, 0)
+        self.assertIn("\"custom-status\": \"active\"", attrs_buf.getvalue())
+
+        set_buf = io.StringIO()
+        with redirect_stdout(set_buf):
+            set_code = siyuan_cli.main(["block", "set-attrs", "blk-1", '{"custom-status":"done"}'])
+        self.assertEqual(set_code, 0)
+        self.assertIn("\"custom-status\": \"done\"", set_buf.getvalue())
 
     @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
     @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
@@ -736,6 +915,30 @@ class CliCommandTests(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("\"notebooks\": [", out)
         self.assertIn("\"next_actions\"", out)
+
+    @patch("scripts.cli.siyuan_cli.DEFAULT_CLIENT", new=FakeClient())
+    @patch("scripts.cli.siyuan_cli.SearchModule", new=FakeSearch)
+    @patch("scripts.cli.siyuan_cli.AttributeViewClient", new=FakeAV)
+    @patch("scripts.cli.siyuan_cli.BlockModule", new=FakeBlocks)
+    @patch("scripts.cli.siyuan_cli.DocumentModule", new=FakeDocs)
+    def test_api_post_read_only_and_write_guard(self):
+        read_buf = io.StringIO()
+        with redirect_stdout(read_buf):
+            read_code = siyuan_cli.main(["api", "post", "/api/system/version", "{}"])
+        self.assertEqual(read_code, 0)
+        self.assertIn("\"path\": \"/api/system/version\"", read_buf.getvalue())
+
+        denied_buf = io.StringIO()
+        with redirect_stdout(denied_buf):
+            denied_code = siyuan_cli.main(["api", "post", "/api/block/updateBlock", '{"id":"blk-1"}'])
+        self.assertEqual(denied_code, 1)
+        self.assertIn("--allow-write", denied_buf.getvalue())
+
+        write_buf = io.StringIO()
+        with redirect_stdout(write_buf):
+            write_code = siyuan_cli.main(["api", "post", "/api/block/updateBlock", '{"id":"blk-1"}', "--allow-write"])
+        self.assertEqual(write_code, 0)
+        self.assertIn("\"allow_write\": true", write_buf.getvalue())
 
 
 if __name__ == "__main__":

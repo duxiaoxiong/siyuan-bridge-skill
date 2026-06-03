@@ -98,6 +98,17 @@ class SiyuanClient:
     def _log_write(self, action: str, payload: Dict[str, Any]) -> None:
         append_write_log(self.write_log_path, action, payload)
 
+    @staticmethod
+    def _normalize_api_path(path: str) -> str:
+        text = str(path or "").strip()
+        if not text:
+            raise ValidationError("缺少 API path")
+        if not text.startswith("/"):
+            text = "/" + text
+        if not text.startswith("/api/"):
+            text = "/api" + text
+        return text
+
     def get_version(self) -> Dict[str, Any]:
         return self._post("/api/system/version")
 
@@ -108,6 +119,9 @@ class SiyuanClient:
             filtered = [nb for nb in notebooks if not self._is_forbidden(nb.get("name", ""))]
             res["data"]["notebooks"] = filtered
         return res
+
+    def get_notebook_conf(self, notebook_id: str) -> Dict[str, Any]:
+        return self._post("/api/notebook/getNotebookConf", {"notebook": notebook_id})
 
     def sql_query(self, stmt: str) -> Dict[str, Any]:
         return self._post("/api/query/sql", {"stmt": stmt})
@@ -189,6 +203,43 @@ class SiyuanClient:
             self._mark_read(str(res["data"]), source="create-doc")
         return res
 
+    def list_docs_by_path(
+        self,
+        notebook_id: str,
+        path: str = "/",
+        sort: int = 15,
+        show_hidden: bool = False,
+        max_list_count: int = 10000,
+    ) -> Dict[str, Any]:
+        payload = {
+            "notebook": notebook_id,
+            "path": path,
+            "sort": int(sort),
+            "showHidden": bool(show_hidden),
+            "maxListCount": int(max_list_count),
+        }
+        return self._post("/api/filetree/listDocsByPath", payload)
+
+    def rename_doc_by_id(self, doc_id: str, title: str) -> Dict[str, Any]:
+        self._guard_doc_write(doc_id, "rename-doc")
+        payload = {"id": doc_id, "title": title}
+        self._log_write("rename_doc_by_id", payload)
+        res = self._post("/api/filetree/renameDocByID", payload)
+        if res.get("code") == 0:
+            self._mark_write(doc_id)
+        return res
+
+    def move_docs_by_id(self, from_ids: List[str], to_id: str) -> Dict[str, Any]:
+        for doc_id in from_ids:
+            self._guard_doc_write(doc_id, "move-doc")
+        payload = {"fromIDs": from_ids, "toID": to_id}
+        self._log_write("move_docs_by_id", payload)
+        res = self._post("/api/filetree/moveDocsByID", payload)
+        if res.get("code") == 0:
+            for doc_id in from_ids:
+                self._mark_write(doc_id)
+        return res
+
     def _guard_by_parent(self, parent_id: str, operation: str) -> str:
         doc_id = self.resolve_root_doc_id(parent_id)
         self._guard_doc_write(doc_id, operation)
@@ -267,6 +318,13 @@ class SiyuanClient:
             self._mark_write(doc_id)
         return res
 
+    def get_block_attrs(self, block_id: str) -> Dict[str, Any]:
+        doc_id = self.resolve_root_doc_id(block_id)
+        res = self._post("/api/attr/getBlockAttrs", {"id": block_id})
+        if res.get("code") == 0:
+            self._mark_read(doc_id, source="get-block-attrs")
+        return res
+
     def get_child_blocks(self, parent_id: str) -> Dict[str, Any]:
         return self._post("/api/block/getChildBlocks", {"id": parent_id})
 
@@ -306,6 +364,73 @@ class SiyuanClient:
         if res.get("code") == 0 and effective_doc_id:
             self._mark_write(effective_doc_id)
         return res
+
+    def safe_api_post(self, path: str, payload: Dict[str, Any], allow_write: bool = False) -> Dict[str, Any]:
+        normalized = self._normalize_api_path(path)
+        read_only = {
+            "/api/system/version",
+            "/api/notebook/lsNotebooks",
+            "/api/notebook/getNotebookConf",
+            "/api/query/sql",
+            "/api/block/getBlockKramdown",
+            "/api/block/getBlockDOM",
+            "/api/block/getChildBlocks",
+            "/api/attr/getBlockAttrs",
+            "/api/filetree/listDocsByPath",
+            "/api/filetree/getHPathByID",
+            "/api/filetree/getIDsByHPath",
+            "/api/av/renderAttributeView",
+            "/api/av/getAttributeView",
+            "/api/av/getAttributeViewKeysByAvID",
+            "/api/av/searchAttributeView",
+            "/api/av/getAttributeViewKeys",
+            "/api/av/getAttributeViewBoundBlockIDsByItemIDs",
+            "/api/av/getAttributeViewItemIDsByBoundIDs",
+        }
+        write_paths = {
+            "/api/block/insertBlock",
+            "/api/block/updateBlock",
+            "/api/block/deleteBlock",
+            "/api/block/moveBlock",
+            "/api/attr/setBlockAttrs",
+            "/api/filetree/createDocWithMd",
+            "/api/filetree/renameDocByID",
+            "/api/filetree/moveDocsByID",
+            "/api/av/addAttributeViewBlocks",
+            "/api/av/addAttributeViewKey",
+            "/api/av/removeAttributeViewBlocks",
+            "/api/av/removeAttributeViewKey",
+            "/api/av/setAttributeViewBlockAttr",
+            "/api/av/batchSetAttributeViewBlockAttrs",
+        }
+
+        if normalized in read_only:
+            return self._post(normalized, payload)
+        if normalized not in write_paths and not allow_write:
+            return {"code": -1, "msg": f"API endpoint not in read-only allowlist: {normalized}. Use --allow-write intentionally.", "data": None}
+        if normalized in write_paths and not allow_write:
+            return {"code": -1, "msg": f"write endpoint requires --allow-write: {normalized}", "data": None}
+
+        doc_id = ""
+        for key in ("id", "parentID", "previousID", "nextID"):
+            raw = payload.get(key)
+            if isinstance(raw, str) and raw:
+                try:
+                    doc_id = self.resolve_root_doc_id(raw)
+                    break
+                except Exception:
+                    doc_id = ""
+        if not doc_id:
+            av_id = str(payload.get("avID") or payload.get("id") or "")
+            if normalized.startswith("/api/av/") and av_id:
+                doc_id = self.resolve_doc_id_from_av_id(av_id)
+        return self.post_with_guard(
+            normalized,
+            payload,
+            operation=f"api-post:{normalized}",
+            doc_id=doc_id or None,
+            log_action=f"api_post:{normalized}",
+        )
 
 
 DEFAULT_CLIENT = SiyuanClient(SETTINGS)

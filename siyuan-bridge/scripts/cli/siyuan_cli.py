@@ -34,7 +34,7 @@ def _print_usage() -> None:
     print(
         "命令: doctor, capabilities, version, notebooks, docs, doc, search, search-type, sql, export, create, "
         "update, append, prepend, insert-after, delete, check, block, refs, callout, embed, super, table, "
-        "open-doc, apply-patch, av"
+        "open-doc, apply-patch, av, api"
     )
 
 
@@ -105,6 +105,10 @@ def _parse_write_content(args: List[str], start_idx: int, command_name: str) -> 
     )
 
 
+def _split_csv(raw: str) -> List[str]:
+    return [x.strip() for x in str(raw or "").split(",") if x.strip()]
+
+
 def _parse_open_doc_flags(args: List[str]) -> Dict[str, Any]:
     flags: Dict[str, Any] = {
         "full": False,
@@ -148,6 +152,11 @@ def _print_av_help(topic: str = "") -> None:
         print("  resolve-id <av_block_id>")
         print("  render <av_id_or_av_block_id>")
         print("  schema <av_id_or_av_block_id>")
+        print("  search <keyword> [--av <av_id>]")
+        print("  columns <av_id>")
+        print("  block-to-item <av_id> <block_ids_csv>")
+        print("  item-to-block <av_id> <item_ids_csv>")
+        print("  block-databases <block_id>")
         print("  types")
         print("  add-col <av_id_or_av_block_id> <name> <type> [--after <previous_key_id>] [--options <json_array>]")
         print("  add-row <av_id_or_av_block_id>")
@@ -179,6 +188,11 @@ def _print_av_help(topic: str = "") -> None:
         "resolve-id": "用法: siyuan.py av resolve-id <av_block_id>",
         "render": "用法: siyuan.py av render <av_id_or_av_block_id>",
         "schema": "用法: siyuan.py av schema <av_id_or_av_block_id>",
+        "search": "用法: siyuan.py av search <keyword> [--av <av_id>]",
+        "columns": "用法: siyuan.py av columns <av_id>",
+        "block-to-item": "用法: siyuan.py av block-to-item <av_id> <block_ids_csv>",
+        "item-to-block": "用法: siyuan.py av item-to-block <av_id> <item_ids_csv>",
+        "block-databases": "用法: siyuan.py av block-databases <block_id>",
         "types": "用法: siyuan.py av types",
         "add-col": "用法: siyuan.py av add-col <av_id_or_av_block_id> <name> <type> [--after <previous_key_id>] [--options <json_array>]",
         "add-row": "用法: siyuan.py av add-row <av_id_or_av_block_id>",
@@ -265,24 +279,46 @@ def _parse_super_flags(args: List[str]) -> Dict[str, Any]:
     return flags
 
 
-def _cmd_block(blocks: BlockModule, args: List[str]) -> int:
+def _cmd_block(client, blocks: BlockModule, args: List[str]) -> int:
     if len(args) < 2:
-        print("用法: siyuan.py block get <block_id> [--format markdown|kramdown|dom|meta]")
+        print("用法: siyuan.py block get <block_id> [--format markdown|kramdown|dom|meta] [--command 'grep x|head 10|length']")
+        print("      siyuan.py block attrs <block_id>")
+        print("      siyuan.py block set-attrs <block_id> <json_attrs>")
         return 1
     sub = args[0]
+    if sub == "attrs" and len(args) >= 2:
+        _print_json(client.get_block_attrs(args[1]))
+        return 0
+    if sub == "set-attrs" and len(args) >= 3:
+        attrs = json.loads(" ".join(args[2:]))
+        if not isinstance(attrs, dict):
+            raise ValidationError("block set-attrs 需要 JSON object")
+        _print_json(client.set_block_attrs(args[1], attrs))
+        return 0
     if sub != "get":
         print(f"未知 block 子命令: {sub}")
         return 1
     block_id = args[1]
     fmt = "markdown"
-    if len(args) >= 4 and args[2] == "--format":
-        fmt = args[3]
-    elif len(args) == 3 and args[2].startswith("--format="):
-        fmt = args[2].split("=", 1)[1]
-    elif len(args) > 2:
-        raise ValidationError("block get 参数错误")
+    command = ""
+    i = 2
+    while i < len(args):
+        token = args[i]
+        if token == "--format" and i + 1 < len(args):
+            fmt = args[i + 1]
+            i += 2
+            continue
+        if token.startswith("--format="):
+            fmt = token.split("=", 1)[1]
+            i += 1
+            continue
+        if token == "--command" and i + 1 < len(args):
+            command = args[i + 1]
+            i += 2
+            continue
+        raise ValidationError(f"block get 未知参数: {token}")
 
-    res = blocks.get_block_content(block_id, fmt=fmt)
+    res = blocks.get_block_content(block_id, fmt=fmt, command=command)
     if res.get("code") != 0:
         _print_json(res)
         return 1
@@ -371,6 +407,27 @@ def _cmd_table(blocks: BlockModule, args: List[str]) -> int:
     return 0
 
 
+def _cmd_api(client, args: List[str]) -> int:
+    if len(args) < 2 or args[0] != "post":
+        print("用法: siyuan.py api post /api/path '<json_payload>' [--allow-write]")
+        return 1
+    path = args[1]
+    allow_write = False
+    payload_parts: List[str] = []
+    for token in args[2:]:
+        if token == "--allow-write":
+            allow_write = True
+            continue
+        payload_parts.append(token)
+    raw_payload = " ".join(payload_parts).strip() or "{}"
+    payload = json.loads(raw_payload)
+    if not isinstance(payload, dict):
+        raise ValidationError("api post payload 必须是 JSON object")
+    res = client.safe_api_post(path, payload, allow_write=allow_write)
+    _print_json(res)
+    return 0 if res.get("code") == 0 else 1
+
+
 def _cmd_doctor(client, args: List[str]) -> int:
     json_mode = "--json" in args or not args
     checks: List[Dict[str, Any]] = []
@@ -439,9 +496,21 @@ def _cmd_capabilities(client, args: List[str]) -> int:
                 "capabilities --json",
                 "docs recent --limit 10 --json",
                 "open-doc <doc_id> typed --semantic --json",
+                "doc tree <notebook_id> / --depth 2 --limit 200 --json",
+                "doc create-child <parent_doc_id> <title>",
+                "doc rename <doc_id> <title>",
+                "doc move <from_doc_ids_csv> <to_id>",
                 "doc import <source> --type url|md|chat --to <notebook_id> <path>",
                 "doc write-full <doc_id_or_path> [--mode replace|append] [--notebook <id>]",
+                "block attrs <block_id>",
+                "block get <block_id> --format markdown --command 'grep keyword|head 20'",
+                "api post /api/system/version '{}'",
                 "av create-inline-template <parent_id_or_doc_id> [columns_json] [--rows <json|@file|->]",
+                "av search <keyword> [--av <av_id>]",
+                "av columns <av_id>",
+                "av block-to-item <av_id> <block_ids_csv>",
+                "av item-to-block <av_id> <item_ids_csv>",
+                "av block-databases <block_id>",
                 "av create-template <notebook_id> <path> [columns]",
                 "av add-row-with-data <av_id_or_av_block_id> --strict <json>",
                 "av seed <av_id_or_av_block_id> --rows <json|@file|->",
@@ -453,6 +522,13 @@ def _cmd_capabilities(client, args: List[str]) -> int:
                 "pmf_apply_patch": True,
                 "doc_import_url": True,
                 "doc_write_full": True,
+                "doc_tree": True,
+                "doc_create_child": True,
+                "doc_rename_move": True,
+                "block_attrs": True,
+                "block_read_filters": True,
+                "safe_api_passthrough": True,
+                "av_discovery_helpers": True,
                 "av_inline_template_create": True,
                 "av_template_create": True,
                 "av_seed_rows": True,
@@ -520,8 +596,88 @@ def _cmd_doc(documents: DocumentModule, args: List[str]) -> int:
     if not args:
         print("用法: siyuan.py doc import <source> --type url|md|chat --to <notebook_id> <path>")
         print("      siyuan.py doc write-full <doc_id_or_path> [--mode replace|append] [--notebook id] [--decode-escapes] [content|stdin]")
+        print("      siyuan.py doc tree <notebook_id> [path] [--sort n] [--depth n] [--limit n] [--json]")
+        print("      siyuan.py doc create-child <parent_doc_id> <title> [--decode-escapes] [content|stdin]")
+        print("      siyuan.py doc rename <doc_id> <title>")
+        print("      siyuan.py doc move <from_doc_ids_csv> <to_id>")
         return 1
     sub = args[0]
+    if sub == "tree" and len(args) >= 2:
+        notebook_id = args[1]
+        path = "/"
+        sort_mode: Optional[int] = None
+        max_depth = 3
+        max_items = 200
+        json_mode = False
+        i = 2
+        if i < len(args) and not args[i].startswith("--"):
+            path = args[i]
+            i += 1
+        while i < len(args):
+            token = args[i]
+            if token == "--sort" and i + 1 < len(args):
+                sort_mode = int(args[i + 1])
+                i += 2
+                continue
+            if token == "--depth" and i + 1 < len(args):
+                max_depth = int(args[i + 1])
+                i += 2
+                continue
+            if token == "--limit" and i + 1 < len(args):
+                max_items = int(args[i + 1])
+                i += 2
+                continue
+            if token == "--json":
+                json_mode = True
+                i += 1
+                continue
+            raise ValidationError(f"doc tree 未知参数: {token}")
+        res = documents.tree(notebook_id, path=path, sort_mode=sort_mode, max_depth=max_depth, max_items=max_items)
+        if json_mode:
+            _print_json(res)
+            return 0 if res.get("code") == 0 else 1
+        for item in res.get("data", {}).get("items", []):
+            print(f"{item.get('name', '')} | {item.get('id', '')} | {item.get('path', '')}")
+        return 0 if res.get("code") == 0 else 1
+    if sub == "tree":
+        print("参数不足: doc tree")
+        print("用法: siyuan.py doc tree <notebook_id> [path] [--sort n] [--depth n] [--limit n] [--json]")
+        return 1
+
+    if sub == "create-child" and len(args) >= 3:
+        parent_doc_id = args[1]
+        title = args[2]
+        markdown = ""
+        if len(args) >= 4 or not sys.stdin.isatty():
+            markdown = _parse_write_content(args, 3, "doc create-child")
+        _print_json(
+            _with_next_actions(
+                documents.create_child(parent_doc_id, title, markdown=markdown),
+                ["python3 scripts/siyuan.py open-doc <doc_id> typed --semantic --json"],
+            )
+        )
+        return 0
+    if sub == "create-child":
+        print("参数不足: doc create-child")
+        print("用法: siyuan.py doc create-child <parent_doc_id> <title> [content|stdin]")
+        return 1
+
+    if sub == "rename" and len(args) >= 3:
+        _print_json(documents.rename(args[1], " ".join(args[2:])))
+        return 0
+    if sub == "rename":
+        print("参数不足: doc rename")
+        print("用法: siyuan.py doc rename <doc_id> <title>")
+        return 1
+
+    if sub == "move" and len(args) >= 3:
+        _print_json(documents.move(_split_csv(args[1]), args[2]))
+        return 0
+    if sub == "move":
+        print("参数不足: doc move")
+        print("用法: siyuan.py doc move <from_doc_ids_csv> <to_id>")
+        return 1
+
     if sub == "import" and len(args) >= 2:
         source = args[1]
         stype = "md"
@@ -735,6 +891,56 @@ def _cmd_av(av: AttributeViewClient, args: List[str]) -> int:
     if sub == "schema":
         print("参数不足: schema")
         _print_av_help("schema")
+        return 1
+
+    if sub == "search" and len(args) >= 2:
+        keyword = args[1]
+        av_id = ""
+        i = 2
+        while i < len(args):
+            token = args[i]
+            if token == "--av" and i + 1 < len(args):
+                av_id = args[i + 1]
+                i += 2
+                continue
+            raise ValidationError(f"av search 未知参数: {token}")
+        _print_json(av.search(keyword, av_id=av_id))
+        return 0
+    if sub == "search":
+        print("参数不足: search")
+        _print_av_help("search")
+        return 1
+
+    if sub == "columns" and len(args) >= 2:
+        _print_json(av.get_columns_by_av_id(args[1]))
+        return 0
+    if sub == "columns":
+        print("参数不足: columns")
+        _print_av_help("columns")
+        return 1
+
+    if sub == "block-to-item" and len(args) >= 3:
+        _print_json(av.block_ids_to_item_ids(args[1], _split_csv(args[2])))
+        return 0
+    if sub == "block-to-item":
+        print("参数不足: block-to-item")
+        _print_av_help("block-to-item")
+        return 1
+
+    if sub == "item-to-block" and len(args) >= 3:
+        _print_json(av.item_ids_to_block_ids(args[1], _split_csv(args[2])))
+        return 0
+    if sub == "item-to-block":
+        print("参数不足: item-to-block")
+        _print_av_help("item-to-block")
+        return 1
+
+    if sub == "block-databases" and len(args) >= 2:
+        _print_json(av.get_block_databases(args[1]))
+        return 0
+    if sub == "block-databases":
+        print("参数不足: block-databases")
+        _print_av_help("block-databases")
         return 1
 
     if sub == "add-col" and len(args) >= 4:
@@ -1288,7 +1494,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if cmd == "block":
-            return _cmd_block(blocks, args[1:])
+            return _cmd_block(client, blocks, args[1:])
 
         if cmd == "refs":
             return _cmd_refs(blocks, args[1:])
@@ -1304,6 +1510,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if cmd == "table":
             return _cmd_table(blocks, args[1:])
+
+        if cmd == "api":
+            return _cmd_api(client, args[1:])
 
         if cmd == "open-doc" and len(args) >= 2:
             doc_id = args[1]

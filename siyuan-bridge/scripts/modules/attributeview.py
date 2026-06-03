@@ -210,6 +210,45 @@ class AttributeViewClient:
         normalized = self._normalize_av_id(av_id)
         return self.client._post("/api/av/getAttributeView", {"id": normalized})
 
+    def search(self, keyword: str, av_id: str = ""):
+        text = str(keyword or "").strip()
+        if not text:
+            raise ValidationError("av search 缺少 keyword")
+        payload: Dict[str, Any] = {"keyword": text}
+        if str(av_id or "").strip():
+            payload["avID"] = self._normalize_av_id(av_id)
+        return self.client._post("/api/av/searchAttributeView", payload)
+
+    def get_columns_by_av_id(self, av_id: str):
+        normalized = self._normalize_av_id(av_id)
+        return self.client._post("/api/av/getAttributeViewKeysByAvID", {"avID": normalized})
+
+    def block_ids_to_item_ids(self, av_id: str, block_ids: List[str]):
+        normalized = self._normalize_av_id(av_id)
+        ids = [str(x).strip() for x in block_ids if str(x).strip()]
+        if not ids:
+            raise ValidationError("block-to-item 缺少 block_ids")
+        return self.client._post(
+            "/api/av/getAttributeViewItemIDsByBoundIDs",
+            {"avID": normalized, "blockIDs": ids},
+        )
+
+    def item_ids_to_block_ids(self, av_id: str, item_ids: List[str]):
+        normalized = self._normalize_av_id(av_id)
+        ids = [str(x).strip() for x in item_ids if str(x).strip()]
+        if not ids:
+            raise ValidationError("item-to-block 缺少 item_ids")
+        return self.client._post(
+            "/api/av/getAttributeViewBoundBlockIDsByItemIDs",
+            {"avID": normalized, "itemIDs": ids},
+        )
+
+    def get_block_databases(self, block_id: str):
+        text = str(block_id or "").strip()
+        if not text:
+            raise ValidationError("block-databases 缺少 block_id")
+        return self.client._post("/api/av/getAttributeViewKeys", {"id": text})
+
     def get_columns(self, av_id: str) -> List[Dict[str, Any]]:
         render = self.render(av_id, wait_ready=True)
         if render.get("code") != 0:

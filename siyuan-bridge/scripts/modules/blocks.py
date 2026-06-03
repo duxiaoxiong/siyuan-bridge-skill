@@ -1,5 +1,6 @@
 """Block operations."""
 
+import re
 from typing import Dict, List, Optional
 
 from ..core.client import SiyuanClient
@@ -19,7 +20,52 @@ class BlockModule:
     def __init__(self, client: SiyuanClient):
         self.client = client
 
-    def get_block_content(self, block_id: str, fmt: str = "markdown") -> Dict[str, object]:
+    def _execute_read_command(self, content: str, command: str) -> str:
+        text = content
+        for raw_part in str(command or "").split("|"):
+            part = raw_part.strip()
+            if not part:
+                continue
+            pieces = part.split()
+            op = pieces[0].lower()
+            if op == "length":
+                text = str(len(text))
+                continue
+            if op == "grep":
+                if len(pieces) < 2:
+                    raise ValidationError("grep 需要 pattern 参数")
+                pattern = " ".join(pieces[1:])
+                regex_match = re.match(r"^/(.*)/([imux]*)$", pattern)
+                if regex_match:
+                    flags = 0
+                    flag_text = regex_match.group(2) or ""
+                    if "i" in flag_text:
+                        flags |= re.IGNORECASE
+                    if "m" in flag_text:
+                        flags |= re.MULTILINE
+                    regex = re.compile(regex_match.group(1), flags)
+                else:
+                    regex = re.compile(re.escape(pattern))
+                text = "\n".join(line for line in text.splitlines() if regex.search(line))
+                continue
+            if op == "head":
+                if len(pieces) not in (2, 3):
+                    raise ValidationError("head 用法: head <n> 或 head <start> <end>")
+                lines = text.splitlines()
+                if len(pieces) == 2:
+                    n = int(pieces[1])
+                    text = "\n".join(lines[:n])
+                else:
+                    start = int(pieces[1])
+                    end = int(pieces[2])
+                    if start < 1 or end < start:
+                        raise ValidationError("head 范围必须为正数且 end >= start")
+                    text = "\n".join(lines[start - 1 : end])
+                continue
+            raise ValidationError(f"未知读取过滤命令: {op}")
+        return text
+
+    def get_block_content(self, block_id: str, fmt: str = "markdown", command: str = "") -> Dict[str, object]:
         block = self.client.get_block(block_id)
         if not block:
             raise ValidationError(f"找不到块: {block_id}")
@@ -50,16 +96,24 @@ class BlockModule:
             res = self.client.get_block_kramdown(block_id)
             if res.get("code") != 0:
                 return res
-            return {"code": 0, "msg": "", "data": {"format": "kramdown", "content": res.get("data", {}).get("kramdown", "")}}
+            content = res.get("data", {}).get("kramdown", "")
+            if command:
+                content = self._execute_read_command(content, command)
+            return {"code": 0, "msg": "", "data": {"format": "kramdown", "content": content, "command": command}}
 
         if mode == "dom":
             res = self.client.get_block_dom(block_id)
             if res.get("code") != 0:
                 return res
-            return {"code": 0, "msg": "", "data": {"format": "dom", "content": res.get("data", {}).get("dom", "")}}
+            content = res.get("data", {}).get("dom", "")
+            if command:
+                content = self._execute_read_command(content, command)
+            return {"code": 0, "msg": "", "data": {"format": "dom", "content": content, "command": command}}
 
         content = block.get("markdown") or block.get("content", "")
-        return {"code": 0, "msg": "", "data": {"format": "markdown", "content": content}}
+        if command:
+            content = self._execute_read_command(content, command)
+        return {"code": 0, "msg": "", "data": {"format": "markdown", "content": content, "command": command}}
 
     def _collect_markdown_for_target(self, block_id_or_doc_id: str) -> Dict[str, str]:
         block = self.client.get_block(block_id_or_doc_id)

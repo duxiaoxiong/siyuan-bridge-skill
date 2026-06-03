@@ -6,12 +6,11 @@ description: SiYuan Note bridge for search, read/write, block operations, Attrib
 # Siyuan Bridge
 
 Use this skill for SiYuan API operations through:
-- workspace compatibility entry (run from workspace root):
-`python3 scripts/siyuan.py ...`
-- direct skill entry (when cwd is this skill):
+- direct skill entry:
 `python3 scripts/siyuan.py ...`
 - safe document edits (read-first, patchable PMF)
 - AttributeView database CRUD
+- NAS-hosted SiYuan connections through LAN or environment override
 
 ## Setup (Required)
 Config priority:
@@ -28,14 +27,18 @@ Minimum required config keys:
 - `api_url`
 - `token_file` (default `~/.config/siyuan/api_token`)
 
+For LAN/FRP profile guidance, read `references/setup-and-profiles.md`.
+
 ## Default Agent Workflow
 1. Health check:
-`python3 scripts/siyuan.py doctor`
+`python3 scripts/siyuan.py doctor --json`
 2. Discover targets with low context cost:
 `python3 scripts/siyuan.py docs recent --limit 10 --json`
-3. Write using L1 commands first (`doc import`, `doc write-full`, `av create-template`, `av seed`).
-4. Validate writes (`av validate`) and retry only if needed.
-5. Follow `data.next_actions` from JSON output instead of probing random commands.
+3. Read before writing:
+`python3 scripts/siyuan.py open-doc <doc_id> typed --semantic --json`
+4. Write using L1 commands first (`doc import`, `doc write-full`, `av create-template`, `av seed`).
+5. Validate writes (`av validate`) and retry only if needed.
+6. Follow `data.next_actions` from JSON output instead of probing random commands.
 
 ## Task Router (Start Here)
 - Need quick structure understanding: `open-doc <doc_id> typed`
@@ -45,10 +48,15 @@ Minimum required config keys:
 - Need capability discovery for no-context agents: `capabilities --json`
 - Need guided next step after each L1 call: use returned `data.next_actions`
 - Need latest docs quickly: `docs recent --limit 10 --json`
+- Need recursive document tree: `doc tree <notebook_id> / --depth 2 --limit 200 --json`
+- Need create child document: `doc create-child <parent_doc_id> <title>`
+- Need rename/move docs: `doc rename <doc_id> <title>`, `doc move <from_doc_ids_csv> <to_id>`
 - Need full-document import (url/md/chat): `doc import <source> --type url|md|chat --to <notebook_id> <path>`
 - Need full-document write/replace: `doc write-full <doc_id_or_path> [--mode replace|append]`
 - Need patch workflow: `open-doc <doc_id> patchable` then `apply-patch`
 - Need exact block format/details: `block get <block_id> --format meta|kramdown|dom`
+- Need low-token block filtering: `block get <block_id> --format markdown --command 'grep keyword|head 20|length'`
+- Need block attributes: `block attrs <block_id>`, `block set-attrs <block_id> <json_attrs>`
 - Need type-targeted discovery (callout/table/av/query_embed): `search-type <type> [--subtype ...] [--box ...]`
 - Need normal content write: `update|append|prepend|insert-after|delete`
 - Need callout write: `callout create|update`
@@ -57,15 +65,25 @@ Minimum required config keys:
 - Need append markdown table row: `table append-row <table_block_id> [json_cells|a,b,c]`
 - Need database template and seed: `av create-template`, `av seed`, then `av validate`
 - Need inline database in an existing page/doc: `av create-inline-template <parent_id_or_doc_id> [columns_json] [--rows ...]`
+- Need database discovery helpers: `av search`, `av columns`, `av block-to-item`, `av item-to-block`, `av block-databases`
 - Need database row/column write: `av schema`, then `av add-row-with-data --strict`, then `av set-cell-by-name`
+- Need a missing read-only API: `api post /api/... <json>`; write APIs require `--allow-write`
 - Need extract links/references/tags/embed SQL from text: `refs extract <block_id_or_doc_id>`
+- Need command details beyond this router: load the relevant reference below, not every reference.
 
 ## Core Commands
 General:
 - `doctor`, `capabilities --json`, `version`, `notebooks`, `docs recent`, `search`, `search-type`, `sql`, `export`
+- `doc tree <notebook_id> [path] [--sort n] [--depth n] [--limit n] [--json]`
+- `doc create-child <parent_doc_id> <title> [--decode-escapes] [content|stdin]`
+- `doc rename <doc_id> <title>`
+- `doc move <from_doc_ids_csv> <to_id>`
 - `doc import <source> --type url|md|chat --to <notebook_id> <path>`
 - `doc write-full <doc_id_or_path> [--mode replace|append] [--notebook <id>] [--decode-escapes]`
-- `block get <block_id> [--format markdown|kramdown|dom|meta]`
+- `block get <block_id> [--format markdown|kramdown|dom|meta] [--command 'grep x|head n|length']`
+- `block attrs <block_id>`
+- `block set-attrs <block_id> <json_attrs>`
+- `api post /api/path <json_payload> [--allow-write]`
 - `refs extract <block_id_or_doc_id>`
 
 Block writes:
@@ -105,6 +123,11 @@ Other AV commands:
 - `av help [subcommand]`
 - `av types`
 - `av render <av_id_or_av_block_id>`
+- `av search <keyword> [--av <av_id>]`
+- `av columns <av_id>`
+- `av block-to-item <av_id> <block_ids_csv>`
+- `av item-to-block <av_id> <item_ids_csv>`
+- `av block-databases <block_id>`
 - `av add-col <av_id_or_av_block_id> <name> <type> [--after <previous_key_id>] [--options <json_array>]`
 - `av add-row <av_id_or_av_block_id>`
 - `av add-row-from-block <av_id_or_av_block_id> <block_id>`
@@ -133,9 +156,21 @@ Other AV commands:
 - If command-arg content contains literal `\n`, CLI now rejects by default and asks to use heredoc/stdin or `--decode-escapes`.
 
 ## References (Load On Demand)
+- Connection setup, LAN default, FRP override, token storage:
+`references/setup-and-profiles.md`
+- Discovery, search, reading views, low-token reading:
+`references/discovery-and-reading.md`
+- Document import/write workflow and planned doc-tree operations:
+`references/document-operations.md`
+- Block, callout, table, embed, attributes:
+`references/block-operations.md`
+- AttributeView workflow, payload formats, type details:
+`references/attributeview-database.md`
+- Safe generic API passthrough design and current guardrails:
+`references/safe-api-passthrough.md`
 - Format patterns from official guide:
 `references/format-patterns.md`
-- AV data model, payload formats, type details:
-`references/attributeview-api.md`
 - Read guard and PMF behavior:
 `references/read-guard-pmf.md`
+- Troubleshooting connection/write failures:
+`references/troubleshooting.md`
